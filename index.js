@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import mongoose from "mongoose";
 import validator from "validator";
+import validUrl from "valid-url";
 
 const app = express();
 // Basic Configuration
@@ -41,88 +42,10 @@ app.use(cors());
 
 app.use("/public", express.static(`${process.cwd()}/public`));
 
-async function handleUrl(url) {
-  // Requested URL is already validated
-  // Call the function to log the current time
-  logCurrentTime();
-
-  try {
-    console.log("Entered the try catch");
-    const result = await Url.findOne({ original_URL: url });
-    console.log("after the first findOne");
-
-    if (result) {
-      console.log("Found record:", result);
-      return {
-        original_url: result.original_URL,
-        short_url: result.short_URL,
-      };
-    } else {
-      console.log("Enter the else block");
-      // Create new document in the database
-      const highestShortURLDoc = await Url.findOne({}, "short_URL").sort({
-        short_URL: -1,
-      });
-
-      let shortURL = highestShortURLDoc
-        ? parseInt(highestShortURLDoc.short_URL, 10) + 1
-        : 1;
-
-      console.log("Next shortURL (should be integer):", shortURL);
-      console.log(typeof shortURL);
-
-      // Ensure shortURL is a number
-      if (isNaN(shortURL)) {
-        throw new Error("shortURL is not a number");
-      }
-
-      // Create new record
-      const newURL = await Url.create({
-        original_URL: url,
-        short_URL: shortURL.toString(), // Make sure short_URL is a string
-      });
-
-      console.log("Record created:", newURL);
-      return {
-        original_url: newURL.original_URL,
-        short_url: newURL.short_URL,
-      };
-    }
-  } catch (err) {
-    console.log("Error handleUrl function:", err);
-    return { error: "Internal server error" };
-  }
-}
-
-// Generate random number of max 3 digits
-function generateRandomNumber() {
-  // Generate a random number between 0 and 999 (inclusive)
-  return Math.floor(Math.random() * 1000);
-}
-
-// For logging current time
-function logCurrentTime() {
-  const currentDate = new Date();
-
-  const hours = currentDate.getHours().toString().padStart(2, "0");
-  const minutes = currentDate.getMinutes().toString().padStart(2, "0");
-  const seconds = currentDate.getSeconds().toString().padStart(2, "0");
-
-  console.log(`Current Time: ${hours}:${minutes}:${seconds}`);
-}
-
-async function handleShortID(shortID) {
-  console.log("Line 125 handleShortID");
-  try {
-    const result = await Url.findOne({ short_URL: shortID });
-    console.log("Line 127 handleShortID: ", result);
-    if (!result) {
-      return { error: "invalid url" };
-    } else return result.original_URL;
-  } catch (error) {
-    console.log("Error at handleShortID: line 131 ", error);
-    return 0;
-  }
+function isValidHttpWwwUrl(url) {
+  const regex =
+    /^(http:\/\/www\.|https:\/\/www\.)[a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,5}(:[0-9]{1,5})?(\/.*)?$/i;
+  return regex.test(url);
 }
 
 app.get("/", function (req, res) {
@@ -136,12 +59,38 @@ app.get("/api/hello", function (req, res) {
 
 app.post("/api/shorturl", async (req, res) => {
   const { url } = req.body;
-  const stringUrl = String(url);
 
-  if (validator.isURL(stringUrl)) {
+  if (validUrl.isWebUri(url)) {
     try {
-      const response = await handleUrl(stringUrl);
-      res.json(response);
+      const result = await Url.findOne({ original_URL: url });
+
+      if (result) {
+        res.json({
+          original_url: result.original_URL,
+          short_url: result.short_URL,
+        });
+      } else {
+        // Create new document in the database
+        const highestShortURLDoc = await Url.findOne({}, "short_URL").sort({
+          short_URL: -1,
+        });
+
+        // Get new shortURL number
+        let shortURL = highestShortURLDoc
+          ? parseInt(highestShortURLDoc.short_URL, 10) + 1
+          : 1;
+
+        // Create new record
+        const newURL = await Url.create({
+          original_URL: url,
+          short_URL: shortURL,
+        });
+
+        res.json({
+          original_url: newURL.original_URL,
+          short_url: newURL.short_URL,
+        });
+      }
     } catch (error) {
       res.status(500).json({ error: "Internal server error" });
     }
@@ -150,14 +99,14 @@ app.post("/api/shorturl", async (req, res) => {
   }
 });
 
-app.get("/api/shorturl/:shortID", async (req, res) => {
-  const shortID = parseInt(req.params.shortID);
+app.get("/api/shorturl/:shortID?", async (req, res) => {
+  const shortID = req.params.shortID;
 
-  if (!isNaN(shortID)) {
+  if (shortID) {
     try {
-      const originalUrl = await handleShortID(shortID);
-      if (originalUrl) {
-        res.redirect(originalUrl);
+      const result = await Url.findOne({ short_URL: shortID });
+      if (result) {
+        res.redirect(result.original_URL);
       } else {
         res.status(404).json({ error: "No URL found for the given short ID" });
       }
@@ -165,7 +114,7 @@ app.get("/api/shorturl/:shortID", async (req, res) => {
       res.status(500).json({ error: "Internal server error" });
     }
   } else {
-    res.json({ error: "invalid short ID" });
+    res.json({ error: "invalid short ID: ", shortID });
   }
 });
 
